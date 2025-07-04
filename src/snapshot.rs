@@ -105,10 +105,21 @@ pub fn indiv_snap_shot(
     let mut sub_dirs_container:Vec<String> = Vec::new();
     
 
-    for entry in fs::read_dir(path).unwrap() {
+    let entries = match fs::read_dir(path) {
+        
+        Ok(entry) => entry,
+        Err(_) => return
+    };
+
+
+    for entry in entries {
 
         let entry = entry.unwrap();
-        let entry_metadata:Metadata = fs::metadata(entry.path()).expect("Error: Unable to retrieve metadata.");
+        let entry_metadata:Metadata = match fs::metadata(entry.path()) {
+
+            Ok(entry_metadata) => entry_metadata,
+            Err(_) => continue,
+        };
 
 
         if entry_metadata.is_dir() {
