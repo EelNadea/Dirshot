@@ -121,9 +121,10 @@ impl eframe::App for DirshotApp {
             }
 
 
-            if 
+            if
                 ui.button("Snapshot 2").clicked() &&
-                self.snap1_button_clicked == true
+                self.snap1_button_clicked == true &&
+                self.snap2_button_clicked != true
             {
                 let mut output_path:PathBuf = PathBuf::from(&self.root_path);
                 output_path.push("Dirshot_Output");
