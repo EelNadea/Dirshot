@@ -1,17 +1,24 @@
 #![allow(unused)]
 
 
-use crate::snapshot::*;
-use crate::analysis::*;
+use crate::{
+
+	snapshot::*,
+	analysis::*
+};
 
 
-use std::fs;
-use std::time::SystemTime;
-use std::path::PathBuf;
+use std::{
+
+	fs,
+	time::SystemTime,
+	path::PathBuf,
+	thread,
+	sync::{Arc, Mutex}
+};
 
 
-use eframe::egui;
-use eframe::egui::output;
+use eframe::egui::{self, output};
 use rusqlite::Connection;
 use rfd::FileDialog;
 
@@ -34,15 +41,24 @@ pub struct DirshotApp {
 }
 
 
-impl eframe::App for DirshotApp {
+pub struct SharedDirshotApp {
+	
+	pub inner:Arc<Mutex<DirshotApp>>
+}
+
+
+impl eframe::App for SharedDirshotApp {
 
     fn update(&mut self, context:&egui::Context, frame:&mut eframe::Frame) {
+
+		let mut app = self.inner.lock().unwrap();
+
 
         egui::TopBottomPanel::bottom("status_bar").show(context, |ui| {
 
             ui.add_space(4.0);
-            ui.label(&self.selected_directory);
-            ui.label(&self.status);
+            ui.label(&app.selected_directory);
+            ui.label(&app.status);
             ui.add_space(4.0);
         });
 
@@ -56,18 +72,18 @@ impl eframe::App for DirshotApp {
 
                 if let Some(folder) = FileDialog::new().pick_folder() {
 
-                   self.root_path = folder.to_string_lossy().to_string();
-                   self.selected_directory = format!("[+] Selected directory: {}", self.root_path);
-                   self.status = "".to_string(); 
+                   app.root_path = folder.to_string_lossy().to_string();
+                   app.selected_directory = format!("[+] Selected directory: {}", app.root_path);
+                   app.status = "".to_string(); 
 
 
-                   self.snap1_button_clicked = false;
-                   self.snap2_button_clicked = false;
-                   self.compare_button_clicked = false;
+                   app.snap1_button_clicked = false;
+                   app.snap2_button_clicked = false;
+                   app.compare_button_clicked = false;
                 }
 
                 else {
-                    self.selected_directory = "[X] No directory selected!".into();
+                    app.selected_directory = "[X] No directory selected!".into();
                 }
             }
 
@@ -77,7 +93,7 @@ impl eframe::App for DirshotApp {
                 ui.label("Max scan depth:");
                 ui.add(
             
-                    egui::DragValue::new(&mut self.max_depth).speed(1).range(1..=255)
+                    egui::DragValue::new(&mut app.max_depth).speed(1).range(1..=255)
                 );
             });
 
@@ -87,18 +103,21 @@ impl eframe::App for DirshotApp {
 
             if 
                 ui.button("Snapshot 1").clicked() && 
-                self.snap1_button_clicked == false
+                app.snap1_button_clicked == false
             {
 
-                if self.root_path.is_empty() {
+                if app.root_path.is_empty() {
 
-                    self.status = "[X] Please choose a directory to monitor.".into();
+                    app.status = "[X] Please choose a directory to monitor.".into();
                     return;
                 }
 
-                else if !self.root_path.is_empty() {
+                else if !app.root_path.is_empty() {
 
-                    let mut output_path:PathBuf = PathBuf::from(&self.root_path);
+                    app.status = "[+] Taking snapshot 1...".into();
+
+
+                    let mut output_path:PathBuf = PathBuf::from(&app.root_path);
                     output_path.push("Dirshot_Output");
 
                     fs::create_dir(&output_path).unwrap();
@@ -108,25 +127,47 @@ impl eframe::App for DirshotApp {
                     db_path.push("snapshot.db");
 
 
-                    let database:Connection = Connection::open(db_path).unwrap();
-                    make_db_tables(&database);
+					// Extract values to move into thread
+					let root_path:String = app.root_path.clone();
+					let max_depth:u8 = app.max_depth;
+
+					// Clone shared arc for threading
+					let thread_app = Arc::clone(&self.inner);
+
+					thread::spawn(move || {
+
+		                let database:Connection = Connection::open(db_path).unwrap();
+		                make_db_tables(&database);
 
 
-                    self.snap1_completion_time = recursive_snap_shot(self.root_path.clone(), &self.max_depth,  1, &database);
+		                let completion_time:SystemTime = recursive_snap_shot(
+
+							root_path, 
+							&max_depth, 
+							1, 
+							&database
+						);
 
 
-                    self.status = "[*] Finished snapshot 1".into();
-                    self.snap1_button_clicked = true;
+						let mut state = thread_app.lock().unwrap();
+						state.snap1_completion_time = completion_time;		                
+						state.status = "[*] Finished snapshot 1".into();
+		                state.snap1_button_clicked = true;
+					});
                 }
             }
 
 
             if
                 ui.button("Snapshot 2").clicked() &&
-                self.snap1_button_clicked == true &&
-                self.snap2_button_clicked != true
+                app.snap1_button_clicked == true &&
+                app.snap2_button_clicked != true
             {
-                let mut output_path:PathBuf = PathBuf::from(&self.root_path);
+
+				app.status = "[+] Taking snapshot 2...".into();
+
+
+                let mut output_path:PathBuf = PathBuf::from(&app.root_path);
                 output_path.push("Dirshot_Output");
 
 
@@ -134,23 +175,45 @@ impl eframe::App for DirshotApp {
                 db_path.push("snapshot.db");
 
 
-                let database:Connection = Connection::open(db_path).unwrap();
+				// Extract values to move into thread
+				let root_path:String = app.root_path.clone();
+				let max_depth:u8 = app.max_depth;
+
+				// Clone shared arc for threading
+				let thread_app = Arc::clone(&self.inner);
+
+				thread::spawn(move || {
+
+	                let database:Connection = Connection::open(db_path).unwrap();
+		            make_db_tables(&database);
 
 
-                let snap2_completion_time:SystemTime = recursive_snap_shot(self.root_path.clone(), &self.max_depth, 2, &database);
+		            let completion_time:SystemTime = recursive_snap_shot(
+
+						root_path, 
+						&max_depth, 
+						2, 
+						&database
+					);
 
 
-                self.status = "[*] Finished snapshot 2".into();
-                self.snap2_button_clicked = true;
+					let mut state = thread_app.lock().unwrap();
+					state.status = "[*] Finished snapshot 2".into();
+		            state.snap2_button_clicked = true;
+				});
             }
 
 
             if 
                 ui.button("Compare").clicked() &&
-                self.snap2_button_clicked == true &&
-                self.compare_button_clicked != true
+                app.snap2_button_clicked == true &&
+                app.compare_button_clicked != true
             {
-                let mut output_path:PathBuf = PathBuf::from(&self.root_path);
+
+				app.status = "[+] Comparing...".into();
+
+
+                let mut output_path:PathBuf = PathBuf::from(&app.root_path);
                 output_path.push("Dirshot_Output");
 
 
@@ -158,21 +221,43 @@ impl eframe::App for DirshotApp {
                 db_path.push("snapshot.db");
 
 
-                let database:Connection = Connection::open(db_path).unwrap();
+				// Extract value to move into thread and to satisfy the borrow checker
+				let root_path:String = app.root_path.clone();
+				let snap1_completion_time:SystemTime = app.snap1_completion_time;
+				let mut file_groups:Vec<Vec<String>> = app.file_groups.clone();
+
+				// Clone shared arc for threading
+				let thread_app = Arc::clone(&self.inner);
+
+				thread::spawn(move || {
+
+		            let database:Connection = Connection::open(db_path).unwrap();
 
 
-                hash_based_file_comparison(&database, &mut self.file_groups, self.snap1_completion_time);
-                make_analysis_output(&self.root_path, &self.file_groups);
+					let mut status_msg:String = String::new();
+					let mut success:bool = true;
 
 
-                let mut report_path:PathBuf = PathBuf::from(output_path);
-                report_path.push("report.txt");
+		            if let Err(err) = hash_based_file_comparison(&database, &mut file_groups, snap1_completion_time) {
+
+						status_msg = format!("[X] Comparison failed: {}", err);		
+						success = false;	
+					};
 
 
-                self.status = format!("[*] Finished comparing. You may check {}", report_path.display()).into();
-                
-                
-                self.compare_button_clicked = true;
+					let mut state = thread_app.lock().unwrap();
+					if success == true {
+				        make_analysis_output(&root_path, &file_groups);
+
+				        let mut report_path:PathBuf = PathBuf::from(output_path);
+				        report_path.push("report.txt");
+
+						state.status = format!("[*] Finished comparing. You may check {}", report_path.display()).into();
+					}
+
+
+		            state.compare_button_clicked = true;
+				});
             }
         });
     }

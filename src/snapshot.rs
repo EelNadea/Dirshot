@@ -166,6 +166,16 @@ pub fn recursive_snap_shot(
     database:&Connection
 
 ) ->  SystemTime {
+
+    /*
+        Traverses the file system using a breadth-first search strategy.
+
+        Instead of the traditional recursive depth-first traversal, this function performs
+        a level-order scan of the directory tree starting from 'root_path'. Each depth
+        level is stored in 'dir_container', and traversal continues level-by-level
+        until 'max_depth' is reached or no more subdirectories are found.
+    */    
+
     
     let mut depth:u8 = 0;
     let mut dir_container:Vec<Vec<String>> = Vec::new();
@@ -186,7 +196,7 @@ pub fn recursive_snap_shot(
             it gets dropped once the loop starts over
         */
         let sub_dirs:Vec<String> = dir_container[depth as usize].clone();
-        if sub_dirs.is_empty() { return SystemTime::now(); }    // Returns compeltion time
+        if sub_dirs.is_empty() { return SystemTime::now(); }    // Returns completion time
 
 
         depth += 1;
