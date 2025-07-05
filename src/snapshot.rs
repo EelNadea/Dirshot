@@ -1,7 +1,10 @@
-use std::io::{self, Write, Cursor};
-use std::fs::{self, Metadata};
-use std::path::Path;
-use std::time::SystemTime;
+use std::{
+
+    io::{self, Write, Cursor},
+    fs::{self, Metadata},
+    path::Path,
+    time::SystemTime
+};
 
 
 use sha256::digest;

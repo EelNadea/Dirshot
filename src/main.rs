@@ -6,9 +6,9 @@ mod analysis;
 
 
 use std::{
-	
-	time::SystemTime,
-	sync::{Arc, Mutex}
+    
+    time::SystemTime,
+    sync::{Arc, Mutex}
 };
 
 
@@ -25,25 +25,25 @@ fn main() -> Result<(), eframe::Error> {
     let max_depth:u8 = 1;   // Default value
 
 
-	let dirshot_app = gui::DirshotApp {
+    let dirshot_app = gui::DirshotApp {
 
-		root_path:String::new(),
-		selected_directory:String::new(),
-		status:String::new(),
+        root_path:String::new(),
+        selected_directory:String::new(),
+        status:String::new(),
 
-		max_depth,
+        max_depth,
 
-		snap1_completion_time:SystemTime::now(),	// Placeholder
+        snap1_completion_time:SystemTime::now(),    // Placeholder
 
-		file_groups,
-	
-		snap1_button_clicked:false,
-		snap2_button_clicked:false,
-		compare_button_clicked:false
-	};
+        file_groups,
+    
+        snap1_button_clicked:false,
+        snap2_button_clicked:false,
+        compare_button_clicked:false
+    };
 
 
-	let shared_app = Arc::new(Mutex::new(dirshot_app));
+    let shared_app = Arc::new(Mutex::new(dirshot_app));
     let options = eframe::NativeOptions::default();
 
     eframe::run_native(
@@ -52,9 +52,9 @@ fn main() -> Result<(), eframe::Error> {
         Box::new(move |_creation_context| {
             
             Ok(Box::new(gui::SharedDirshotApp {
-			
-				inner:Arc::clone(&shared_app)
-			}))
+            
+                inner:Arc::clone(&shared_app)
+            }))
         })
     )
 }
