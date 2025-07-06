@@ -34,7 +34,7 @@ struct DirshotApp {
 
     snap1_completion_time:SystemTime,
 
-    file_groups:Vec<Vec<String>>,
+    file_groups:[Vec<String>; 4],
 
     snap1_button_clicked:bool,
     snap2_button_clicked:bool,
@@ -104,7 +104,7 @@ impl eframe::App for SharedDirshotApp {
 
             if 
                 ui.button("Snapshot 1").clicked() && 
-                app.snap1_button_clicked == false
+                !app.snap1_button_clicked
             {
 
                 if app.root_path.is_empty() {
@@ -161,8 +161,8 @@ impl eframe::App for SharedDirshotApp {
 
             if
                 ui.button("Snapshot 2").clicked() &&
-                app.snap1_button_clicked == true &&
-                app.snap2_button_clicked != true
+                app.snap1_button_clicked &&
+                !app.snap2_button_clicked
             {
 
                 app.status = "[+] Taking snapshot 2...".into();
@@ -207,8 +207,8 @@ impl eframe::App for SharedDirshotApp {
 
             if 
                 ui.button("Compare").clicked() &&
-                app.snap2_button_clicked == true &&
-                app.compare_button_clicked != true
+                app.snap2_button_clicked &&
+                !app.compare_button_clicked
             {
 
                 app.status = "[+] Comparing...".into();
@@ -225,7 +225,7 @@ impl eframe::App for SharedDirshotApp {
                 // Extract value to move into thread and to satisfy the borrow checker
                 let root_path:String = app.root_path.clone();
                 let snap1_completion_time:SystemTime = app.snap1_completion_time;
-                let mut file_groups:Vec<Vec<String>> = app.file_groups.clone();
+                let mut file_groups:[Vec<String>; 4] = app.file_groups.clone();
 
                 // Clone shared arc for threading
                 let thread_app = Arc::clone(&self.inner);
@@ -247,13 +247,13 @@ impl eframe::App for SharedDirshotApp {
 
 
                     let mut state = thread_app.lock().unwrap();
-                    if success == true {
-                        make_analysis_output(&root_path, &file_groups);
+                    if success {
+                        make_analysis_output(&root_path, file_groups);
 
                         let mut report_path:PathBuf = PathBuf::from(output_path);
                         report_path.push("report.txt");
 
-                        state.status = format!("[*] Finished comparing. You may check {}", report_path.display()).into();
+                        state.status = format!("[*] Finished comparing. You may check {}", report_path.display());
                     }
 
 
@@ -267,7 +267,7 @@ impl eframe::App for SharedDirshotApp {
 
 fn main() -> Result<(), eframe::Error> {
 
-    let mut file_groups:Vec<Vec<String>> = vec![
+    let mut file_groups:[Vec<String>; 4] = [
 
         Vec::new(), // 0: Unchanged files. Same path, same hash
         Vec::new(), // 1: Renamed or moved files. Same hash, different path

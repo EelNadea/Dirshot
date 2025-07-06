@@ -23,7 +23,7 @@ pub fn hash_based_file_comparison(
     
     // Parameters
     database:&Connection, 
-    file_groups:&mut Vec<Vec<String>>, 
+    file_groups:&mut [Vec<String>; 4],
     snap1_completion_time:SystemTime
 
 ) -> Result<(), rusqlite::Error> {
@@ -88,7 +88,7 @@ pub fn hash_based_file_comparison(
 }
 
 
-pub fn make_analysis_output(root_path:&String, file_groups:&Vec<Vec<String>>) {
+pub fn make_analysis_output(root_path:&String, file_groups:[Vec<String>; 4]) {
 
     let mut analysis_output:File = 
         File::create(format!("{}/Dirshot_Output/report.txt", root_path))
@@ -100,7 +100,7 @@ pub fn make_analysis_output(root_path:&String, file_groups:&Vec<Vec<String>>) {
 
         writeln!(analysis_output, "\t{}", unchanged_file).expect("Error: File write failed");
     }
-    analysis_output.write(b"\n");
+    analysis_output.write_all(b"\n");
 
 
     analysis_output.write_all(b"Renamed or moved files:\n");
@@ -108,7 +108,7 @@ pub fn make_analysis_output(root_path:&String, file_groups:&Vec<Vec<String>>) {
 
         writeln!(analysis_output, "\t{}", renamed_or_moved_file).expect("Error: File write failed");
     }
-    analysis_output.write(b"\n");
+    analysis_output.write_all(b"\n");
 
 
         analysis_output.write_all(b"Edited files:\n");
@@ -116,7 +116,7 @@ pub fn make_analysis_output(root_path:&String, file_groups:&Vec<Vec<String>>) {
 
         writeln!(analysis_output, "\t{}", renamed_or_moved_file).expect("Error: File write failed");
     }
-    analysis_output.write(b"\n");
+    analysis_output.write_all(b"\n");
 
 
     analysis_output.write_all(b"New files:\n");

@@ -142,12 +142,11 @@ pub fn indiv_snap_shot(
             let file_path:String = entry.path().display().to_string();
 
             
-            let file_info:FileInfo = 
-                    build_file_info_struct(
-                        file_path, 
-                        *depth, 
-                        entry_metadata
-                    );
+            let file_info:FileInfo = build_file_info_struct(
+                file_path,
+                *depth,
+                entry_metadata
+            );
 
 
             insert_file_into_db(&database, file_info, *snap_instance);
@@ -190,12 +189,12 @@ pub fn recursive_snap_shot(
 
 
     let mut start:usize = 0;
-    while
-        (depth + 1) != *max_depth ||   // max_depth has a minimum value of 1
-        start != dir_container.len()
-    {
+    while (depth + 1) != *max_depth {    // max_depth has a minimum value of 1
 
         let end:usize = dir_container.len();   // The len function has O(1) time complexity
+        if start == end { break; }
+
+
         for i in start..end {
 
             let sub_dir:String = std::mem::take(&mut dir_container[i]);    // Take ownership and leave an empty string
