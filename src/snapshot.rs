@@ -98,15 +98,12 @@ pub fn indiv_snap_shot(
     
     // Parameters
     path:String,
-    dir_container:&mut Vec<Vec<String>>,
+    dir_container:&mut Vec<String>,
     depth:&u8,
     snap_instance:&u8,
     database:&Connection
 
 ) {
-
-    let mut sub_dirs_container:Vec<String> = Vec::new();
-    
 
     let entries = match fs::read_dir(path) {
         
@@ -130,7 +127,8 @@ pub fn indiv_snap_shot(
             let dir_path:String = entry.path().display().to_string();
             if dir_path.contains("Dirshot_Output") { continue; }        // Skip this directory
 
-            sub_dirs_container.push(dir_path.clone());
+
+            dir_container.push(dir_path.clone());
 
 
             let dir_info:DirInfo = build_dir_info_struct(dir_path, &depth, entry_metadata);
@@ -155,9 +153,6 @@ pub fn indiv_snap_shot(
             insert_file_into_db(&database, file_info, *snap_instance);
         }
     }
-    
-
-    dir_container[*depth as usize].extend(sub_dirs_container);
 }
 
 
@@ -177,40 +172,43 @@ pub fn recursive_snap_shot(
         a level-order scan of the directory tree starting from 'root_path'. Each depth
         level is stored in 'dir_container', and traversal continues level-by-level
         until 'max_depth' is reached or no more subdirectories are found.
+
+        This implementation takes advantage of Rust’s Vec allocation strategy, where pushing
+        elements into a vector typically causes its capacity to double (or grow geometrically)
+        when more space is needed. By reusing the same vector and leaving previously processed
+        entries as empty strings via std::mem::take, this approach minimizes unnecessary
+        allocations and benefits from the amortized growth of the vector. As a result, new
+        entries are added efficiently to the tail, leveraging preallocated capacity and reducing
+        the frequency of costly reallocations.
     */    
 
     
     let mut depth:u8 = 0;
-    let mut dir_container:Vec<Vec<String>> = Vec::new();
-    dir_container.push(Vec::new());                         // Index = depth
+    let mut dir_container:Vec<String> = Vec::new();
 
     indiv_snap_shot(root_path, &mut dir_container, &depth, &snap_instance, &database);
 
 
-    while depth != *max_depth {
+    let mut start:usize = 0;
+    while
+        (depth + 1) != *max_depth ||   // max_depth has a minimum value of 1
+        start != dir_container.len()
+    {
 
-        // Index = depth + 1
-        dir_container.push(Vec::new());
+        let end:usize = dir_container.len();   // The len function has O(1) time complexity
+        for i in start..end {
 
-        
-        /* 
-            Clone the current depth to avoid complicating the structure of the program. 
-            This is a reasonable trade off since it does not accumulate, but rather, 
-            it gets dropped once the loop starts over
-        */
-        let sub_dirs:Vec<String> = dir_container[depth as usize].clone();
-        if sub_dirs.is_empty() { return SystemTime::now(); }    // Returns completion time
-
-
-        depth += 1;
-        for sub_dir in sub_dirs {
-
+            let sub_dir:String = std::mem::take(&mut dir_container[i]);    // Take ownership and leave an empty string
             indiv_snap_shot(sub_dir, &mut dir_container, &depth, &snap_instance, &database);
         }
+
+
+        start = end;
+        depth += 1;
     }
 
 
-    return SystemTime::now();
+    SystemTime::now()
 }
 // **********************************************************************************************************
 
