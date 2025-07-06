@@ -189,12 +189,15 @@ pub fn recursive_snap_shot(
 
 
     let mut start:usize = 0;
-    while (depth + 1) != *max_depth {    // max_depth has a minimum value of 1
+    while
+        (depth + 1) != *max_depth &&    // max_depth has a minimum value of 1
+        start != dir_container.len()
+    {
 
         let end:usize = dir_container.len();   // The len function has O(1) time complexity
-        if start == end { break; }
 
 
+        depth += 1;
         for i in start..end {
 
             let sub_dir:String = std::mem::take(&mut dir_container[i]);    // Take ownership and leave an empty string
@@ -203,7 +206,6 @@ pub fn recursive_snap_shot(
 
 
         start = end;
-        depth += 1;
     }
 
 
