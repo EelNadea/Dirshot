@@ -1,9 +1,9 @@
 #![allow(unused)]
 
-
+/*
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
-
+*/
 
 mod snapshot;
 mod analysis;
@@ -15,7 +15,7 @@ use analysis::*;
 
 use std::{
     fs,
-    time::SystemTime,
+    time::{SystemTime, Instant, Duration},
     path::PathBuf,
     thread,
     sync::{Arc, Mutex}
@@ -73,6 +73,7 @@ impl eframe::App for SharedDirshotApp {
 
         egui::CentralPanel::default().show(context, |ui| {
             ui.heading("Directory Snapshotter");
+            ui.separator();     // For layout purposes
 
 
             if ui.button("Choose a directory").clicked() {
@@ -99,9 +100,6 @@ impl eframe::App for SharedDirshotApp {
                     egui::DragValue::new(&mut app.max_depth).speed(1).range(1..=255)
                 );
             });
-
-
-            ui.separator();     // For layout purposes
 
 
             if 
@@ -207,6 +205,8 @@ fn main() -> Result<(), eframe::Error> {
 
 
 fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
+    let start_time:Instant = Instant::now();
+
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -231,9 +231,10 @@ fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
                     &connection
                 );
 
+                let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
 
                 state.snap1_completion_time = completion_time;
-                state.status = "[*] Finished snapshot 1".into();
+                state.status = format!("[*] Finished snapshot 1\nElapsed time: {:.2}", elapsed_time);
                 state.snap1_button_clicked = true;
             },
 
@@ -249,6 +250,8 @@ fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
 
 
 fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
+    let start_time:Instant = Instant::now();
+
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -270,7 +273,10 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
                     2,
                     &connection
                 );
-                state.status = "[*] Finished snapshot 2".into();
+
+                let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
+
+                state.status = format!("[*] Finished snapshot 2\nElapsed time: {:.2}s", elapsed_time);
                 state.snap2_button_clicked = true;
             },
 
@@ -284,6 +290,8 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
 
 
 fn compare(thread_app:Arc<Mutex<DirshotApp>>) {
+    let start_time:Instant = Instant::now();
+
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -309,7 +317,14 @@ fn compare(thread_app:Arc<Mutex<DirshotApp>>) {
                     make_analysis_output(&state.root_path, file_groups);
                     let mut report_path:PathBuf = output_path;
                     report_path.push("report.txt");
-                    state.status = format!("[*] Finished comparing. You may check {}", report_path.display());
+                    let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
+
+
+                    state.status = format!(
+                        "[*] Finished comparing. You may check {}\nElapsed time: {:.2}s",
+                        report_path.display(),
+                        elapsed_time
+                    );
                 }
 
                 state.compare_button_clicked = true;
