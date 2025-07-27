@@ -6,78 +6,112 @@ use std::{
     io::Write
 };
 
-use rusqlite::Connection;
+use crate::{
+    FileInfoMap,
+    FileInfo,
+    insert_files_into_db
+};
+
+use rusqlite::{Connection, params};
 
 // Constants for file_groups:Vec<Vec<String>> indices
-const UNCHANGED_FILES:usize = 0;
+const REMOVED_FILES:usize = 0;
 const RENAMED_OR_MOVED_FILES:usize = 1;
 const EDITED_FILES:usize = 2;
 const NEW_FILES:usize = 3;
 
-pub fn hash_based_file_comparison(
-    // Parameters
+
+pub fn hash_based_comparison(
     database:&Connection, 
     file_groups:&mut [Vec<String>; 4],
-    snap1_completion_time:SystemTime
+    snap2_file_info_map:&mut FileInfoMap
 ) -> Result<(), rusqlite::Error> {
 
-    let snap1_completion_time:usize = 
-        snap1_completion_time
-            .duration_since(UNIX_EPOCH)
-            .expect("Error: SystemTime convertion to usize failed")
-            .as_secs() as usize;
-
     let mut snap1_query = database.prepare(
-        "SELECT file_path FROM snap1_files WHERE sha256 = ?1"
+        "SELECT file_path, sha256 FROM snap1_files"
     ).unwrap();
 
-    let mut snap2_query = database.prepare(
-        "SELECT file_path, sha256 FROM snap2_files"
-    ).unwrap();
-
-    let snap2_rows = snap2_query.query_map([], |row| {
+    let snap1_rows = snap1_query.query_map([], |row| {
         Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?
+            row.get::<_, String>(0)?,   // file_path
+            row.get::<_, String>(1)?    // sha256
         ))
     })?;
 
-    for row in snap2_rows {
-        let (snap2_file_path, snap2_sha256) = row?;
 
-        let mut matches = snap1_query.query([&snap2_sha256])?;
-        if let Some(matched_row) = matches.next()? {
-            // Ideally, there should only be one match, hence the use of a constant index
-            let snap1_file_path:String = matched_row.get(0)?;
+    for row in snap1_rows {
+        let (snap1_file_path, snap1_sha256) = row?;
 
-            if snap2_file_path == snap1_file_path { file_groups[UNCHANGED_FILES].push(snap2_file_path); }
-            else { file_groups[RENAMED_OR_MOVED_FILES].push(snap2_file_path); }
-        }
 
-        else { 
-            let (last_modified, time_created):(usize, usize) = database.query_row(
-                "SELECT last_modified, time_created FROM snap2_files WHERE file_path = ?1",
-                rusqlite::params![snap2_file_path],
-                |row| Ok((row.get(0)?, row.get(1)?))
-            ).unwrap();
+        if let Some(snap2_file_info) = snap2_file_info_map.search_map(&snap1_sha256, &snap1_file_path) {
+            if
+                snap1_sha256 == snap2_file_info.sha256 &&
+                snap1_file_path == snap2_file_info.file_path
+            { snap2_file_info_map.remove_entry(&snap2_file_info); }
 
-            if (last_modified > snap1_completion_time) && (time_created != last_modified) { 
-                file_groups[EDITED_FILES].push(snap2_file_path); 
+            else if
+                snap1_sha256 == snap2_file_info.sha256 &&
+                snap1_file_path != snap2_file_info.file_path
+            {
+                file_groups[RENAMED_OR_MOVED_FILES].push(snap1_file_path);
+                snap2_file_info_map.remove_entry(&snap2_file_info);
             }
-            else if time_created > snap1_completion_time { file_groups[NEW_FILES].push(snap2_file_path); }
+
+            else if
+                snap1_sha256 != snap2_file_info.sha256 &&
+                snap1_file_path == snap2_file_info.file_path
+            {
+                file_groups[EDITED_FILES].push(snap1_file_path);
+                snap2_file_info_map.remove_entry(&snap2_file_info);
+            }
         }
     }
 
+
     Ok(())
 }
+
+pub fn time_based_comparison(
+    file_groups:&mut [Vec<String>; 4],
+    snap1_completion_time:&SystemTime,
+    snap2_file_info_map:&FileInfoMap
+) {
+
+    /*
+        This hashmap has been chosen arbitrarily. There would be no difference between iterating
+        over "by_file_path" or "by_hash" since both hashmaps point to the same data
+    */
+    for arc in snap2_file_info_map.by_path.values() {
+        if arc.time_created >= *snap1_completion_time {
+            file_groups[NEW_FILES].push(arc.file_path.clone());
+        }
+        else if arc.last_modified >= *snap1_completion_time {
+            file_groups[EDITED_FILES].push(arc.file_path.clone());
+        }
+    }
+}
+
+
+pub fn write_file_groups_to_db(
+    database:&Connection,
+    file_groups:&[Vec<String>; 4],
+    snap2_file_info_map:&FileInfoMap
+) -> rusqlite::Result<(), rusqlite::Error> {
+
+
+
+
+    Ok(())
+}
+
 
 pub fn make_analysis_output(root_path:&String, file_groups:[Vec<String>; 4]) {
     let mut analysis_output:File = 
         File::create(format!("{}/Dirshot_Output/report.txt", root_path))
         .expect("Error: Output file creation failed");
 
-    analysis_output.write_all(b"Unchanged files:\n");
-    for unchanged_file in &file_groups[UNCHANGED_FILES] {
+    analysis_output.write_all(b"Removed files:\n");
+    for unchanged_file in &file_groups[REMOVED_FILES] {
         writeln!(analysis_output, "\t{}", unchanged_file).expect("Error: File write failed");
     }
     analysis_output.write_all(b"\n");

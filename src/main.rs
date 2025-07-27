@@ -36,8 +36,8 @@ struct DirshotApp {
     max_depth:u8,
 
     snap1_completion_time:SystemTime,
+    snap2_file_info_map:FileInfoMap,
 
-    file_groups:[Vec<String>; 4],
 
     snap1_button_clicked:bool,
     snap2_button_clicked:bool,
@@ -90,6 +90,7 @@ impl eframe::App for SharedDirshotApp {
 
                 else {
                     app.err = "[X] No directory selected!".into();
+                    app.selected_directory = "".to_string();
                 }
             }
 
@@ -160,13 +161,6 @@ impl eframe::App for SharedDirshotApp {
 
 
 fn main() -> Result<(), eframe::Error> {
-
-    let mut file_groups:[Vec<String>; 4] = [
-        Vec::new(), // 0: Unchanged files. Same path, same hash
-        Vec::new(), // 1: Renamed or moved files. Same hash, different path
-        Vec::new(), // 2: Edited files. Same path, different hash
-        Vec::new()  // 3: New files
-    ];
     let max_depth:u8 = 1;   // Default value
 
 
@@ -179,9 +173,8 @@ fn main() -> Result<(), eframe::Error> {
         max_depth,
 
         snap1_completion_time:SystemTime::now(),    // Placeholder
+        snap2_file_info_map:FileInfoMap::new(),
 
-        file_groups,
-    
         snap1_button_clicked:false,
         snap2_button_clicked:false,
         compare_button_clicked:false
@@ -214,21 +207,21 @@ fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
 
         if let Err(err) = fs::create_dir(&output_path) {
             state.err = format!("[X] Error: Failed to create output directory: {}", err);
+            return
         };
         let mut db_path:PathBuf = output_path.clone();
         db_path.push("snapshot.db");
 
 
         match Connection::open(db_path) {
-            Ok(connection) => {
+            Ok(mut connection) => {
                 make_db_tables(&connection);
 
 
-                let completion_time:SystemTime = recursive_snap_shot(
+                let completion_time:SystemTime = recursive_scan_snap1(
                     state.root_path.to_string(),
                     &state.max_depth,
-                    1,
-                    &connection
+                    &mut connection
                 );
 
                 let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
@@ -260,14 +253,14 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
         let mut db_path:PathBuf = output_path.clone();
         db_path.push("snapshot.db");
 
-        // Extract values to move into thread
+
         let root_path:String = state.root_path.clone();
         let max_depth:u8 = state.max_depth;
 
 
         match Connection::open(db_path) {
             Ok(connection) => {
-                let completion_time:SystemTime = recursive_snap_shot(
+                let snap2_file_map:FileInfoMap = recursive_scan_snap2(
                     state.root_path.to_string(),
                     &state.max_depth,
                     2,
@@ -277,6 +270,7 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
                 let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
 
                 state.status = format!("[*] Finished snapshot 2\nElapsed time: {:.2}s", elapsed_time);
+                state.snap2_file_info_map = snap2_file_map;
                 state.snap2_button_clicked = true;
             },
 
@@ -305,12 +299,25 @@ fn compare(thread_app:Arc<Mutex<DirshotApp>>) {
         match Connection::open(db_path) {
             Ok(database) => {
                 let snap1_completion_time:SystemTime = state.snap1_completion_time;
-                let mut file_groups = std::mem::take(&mut state.file_groups);
 
-                if let Err(err) = hash_based_file_comparison(&database, &mut file_groups, snap1_completion_time) {
+                let mut file_groups:[Vec<String>; 4] = [
+                    Vec::new(), // 0: Removed files
+                    Vec::new(), // 1: Renamed or moved files. Same hash, different path
+                    Vec::new(), // 2: Edited files. Same path, different hash
+                    Vec::new()  // 3: New files
+                ];
+
+                if let Err(err) = hash_based_comparison(
+                    &database,
+                    &mut file_groups,
+                    &mut state.snap2_file_info_map)
+                {
+
                     state.err = format!("[X] Error: Comparison failed: {}", err);
                     success = false;
                     return
+                } else {
+                    time_based_comparison(&mut file_groups, &state.snap1_completion_time, &state.snap2_file_info_map);
                 }
 
                 if success {

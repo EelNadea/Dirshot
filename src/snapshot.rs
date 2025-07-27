@@ -2,107 +2,97 @@ use std::{
     io::{self, Write, Cursor},
     fs::{self, Metadata},
     path::Path,
-    time::SystemTime
+    time::SystemTime,
+    collections::HashMap,
+    sync::Arc,
+    mem
 };
 
 
-use sha256::digest;
 use rusqlite::Connection;
-use zstd;
+use sha256::digest;
+use zstd::encode_all;
 
 
-// **********************************************************************************************************
+const BATCH_BUFFER:u8 = 100;    // buffer for file_info_batch
+
 pub struct FileInfo {
-    file_path:String,
-    depth:u8,               
-    compressed_bytes:Vec<u8>,
-    sha256:String,
+    pub file_path:String,
+    pub depth:u8,
+    pub compressed_bytes:Vec<u8>,
+    pub sha256:String,
 
-    last_modified:SystemTime,
-    time_created:SystemTime
+    pub last_modified:SystemTime,
+    pub time_created:SystemTime
 }
 
 
-pub struct DirInfo {
-    dir_path:String,   
-    depth:u8,              // first_sub_dirs = 0, second_sub_dirs = 1, etc...
+impl FileInfo {
+    pub fn new() -> Self {
+        Self {
+            // Default values
+            file_path: String::new(),
+            depth: 0,
+            compressed_bytes: Vec::new(),
+            sha256: String::new(),
 
-    last_modified:SystemTime,
-    time_created:SystemTime
-}
-
-
-pub fn build_file_info_struct(
-    // Parameters
-    file_path:String, 
-    depth:u8,
-    file_meta:Metadata
-) -> FileInfo {
-    
-    let raw_bytes:Vec<u8> = fs::read(&file_path).unwrap_or_else(|err| {
-       eprintln!("Error: Unable to read the raw bytes: {:?}", err);
-       Vec::new()
-    });
-
-    let compressed_bytes:Vec<u8> = zstd::encode_all(Cursor::new(&raw_bytes), 3).unwrap_or_else(|err| {
-        eprintln!("Error: Unable to compress the bytes: {:?}", err);
-        Vec::new()
-    });
+            last_modified: SystemTime::now(),
+            time_created: SystemTime::now()
+        }
+    }
 
 
-    let sha256:String = digest(&raw_bytes);
+    pub fn build_file_info_struct(
+        file_path:String,
+        depth:u8,
+        file_meta:Metadata
+    ) -> FileInfo {
+
+        let raw_bytes:Vec<u8> = fs::read(&file_path).unwrap_or_else(|err| {
+            eprintln!("Error: Unable to read the raw bytes: {:?}", err);
+            Vec::new()
+        });
+
+        let compressed_bytes:Vec<u8> = zstd::encode_all(Cursor::new(&raw_bytes), 3).unwrap_or_else(|err| {
+            eprintln!("Error: Unable to compress the bytes: {:?}", err);
+            Vec::new()
+        });
 
 
-    let last_modified:SystemTime = file_meta.modified().unwrap_or_else(|err| {
-       eprintln!("Error: Unable to retrieve modification time: {:?}", err);
-       SystemTime::now() // Fallback value
-    });
-
-    let time_created:SystemTime = file_meta.created().unwrap_or_else(|err| {
-        eprintln!("Error: Unable to retrieve birth time: {:?}", err);
-        SystemTime::now()
-    });
+        let sha256:String = digest(&raw_bytes);
 
 
-    FileInfo {
-        file_path,
-        depth,
-        compressed_bytes,
-        sha256,
+        let last_modified:SystemTime = file_meta.modified().unwrap_or_else(|err| {
+            eprintln!("Error: Unable to retrieve modification time: {:?}", err);
+            SystemTime::now() // Fallback value
+        });
 
-        last_modified,
-        time_created
+        let time_created:SystemTime = file_meta.created().unwrap_or_else(|err| {
+            eprintln!("Error: Unable to retrieve birth time: {:?}", err);
+            SystemTime::now()
+        });
+
+
+        FileInfo {
+            file_path,
+            depth,
+            compressed_bytes,
+            sha256,
+
+            last_modified,
+            time_created
+        }
     }
 }
 
-pub fn build_dir_info_struct(
-    // Parameters
-    dir_path:String,
-    depth:&u8,
-    dir_meta:Metadata
-) -> DirInfo {
 
-    let last_modified:SystemTime= dir_meta.modified().unwrap();
-    let time_created:SystemTime = dir_meta.created().unwrap();
-
-    DirInfo {
-        dir_path,
-        depth: *depth,
-
-        last_modified,
-        time_created
-    }
-}
-// **********************************************************************************************************
-
-// **********************************************************************************************************
-pub fn indiv_snap_shot(
-    // Parameters
+pub fn scan_dir_snap1(
     path:String,
+    file_info_batch:&mut [FileInfo; 100],
+    batch_count:&mut u8,
     dir_container:&mut Vec<String>,
     depth:&u8,
-    snap_instance:&u8,
-    database:&Connection
+    database:&mut Connection
 ) {
 
     let entries = match fs::read_dir(path) {
@@ -118,39 +108,47 @@ pub fn indiv_snap_shot(
             Err(_) => continue,
         };
 
+
         if entry_metadata.is_dir() {
             let dir_path:String = entry.path().display().to_string();
             if dir_path.contains("Dirshot_Output") { continue; }        // Skip this directory
 
-            dir_container.push(dir_path.clone());
-
-            let dir_info:DirInfo = build_dir_info_struct(dir_path, &depth, entry_metadata);
-            insert_dir_into_db(&database, dir_info, *snap_instance);
+            dir_container.push(dir_path);
         }
 
-        else if 
+        else if
             entry_metadata.is_file() && 
-            entry_metadata.len() <= 200 * 1024 * 1024   // 200MB
+            entry_metadata.len() <= 1024 * 1024 * 1024   // 1GB
         { 
             let file_path:String = entry.path().display().to_string();
             
-            let file_info:FileInfo = build_file_info_struct(
+            let file_info:FileInfo = FileInfo::build_file_info_struct(
                 file_path,
                 *depth,
                 entry_metadata
             );
 
-            insert_file_into_db(&database, file_info, *snap_instance);
+            if *batch_count < BATCH_BUFFER {
+                file_info_batch[*batch_count as usize] = file_info;
+                *batch_count += 1;
+            }
+            else {
+                // Resetting file_info_batch is not needed since batch_counter will overwrite the previous data
+                insert_files_into_db(database, &*file_info_batch, 1);
+                *batch_count = 0;
+
+                file_info_batch[*batch_count as usize] = file_info;
+                *batch_count += 1;
+            }
         }
     }
 }
 
 
-pub fn recursive_snap_shot(
+pub fn recursive_scan_snap1(
     root_path:String,
     max_depth:&u8,
-    snap_instance:u8, 
-    database:&Connection
+    database:&mut Connection
 ) ->  SystemTime {
 
     /*
@@ -170,109 +168,243 @@ pub fn recursive_snap_shot(
         the frequency of costly reallocations.
     */    
     
-    let mut depth:u8 = 0;
+    let mut current_depth:u8 = 0;
     let mut dir_container:Vec<String> = Vec::new();
 
-    indiv_snap_shot(root_path, &mut dir_container, &depth, &snap_instance, &database);
+    let mut file_info_batch:[FileInfo; BATCH_BUFFER as usize] = std::array::from_fn(|_| FileInfo::new());
+    let mut batch_count:u8 = 0;  // Keeps count of the non-trivial FileInfo members
+
+    scan_dir_snap1(
+        root_path,
+        &mut file_info_batch,
+        &mut batch_count,
+        &mut dir_container,
+        &current_depth,
+        database
+    );
 
 
     let mut start:usize = 0;
     while
-        (depth + 1) != *max_depth &&    // max_depth has a minimum value of 1
+        (current_depth + 1) != *max_depth &&    // max_depth has a minimum value of 1
         start != dir_container.len()
     {
         let end:usize = dir_container.len();   // The len function has O(1) time complexity
         dir_container.reserve_exact(end*2);
 
 
-        depth += 1;
+        current_depth += 1;
         for i in start..end {
-            let sub_dir:String = std::mem::take(&mut dir_container[i]);    // Take ownership and leave an empty string
-            indiv_snap_shot(sub_dir, &mut dir_container, &depth, &snap_instance, &database);
+            let sub_dir:String = mem::take(&mut dir_container[i]);    // Take ownership and leave an empty string
+
+            scan_dir_snap1(
+                sub_dir,
+                &mut file_info_batch,
+                &mut batch_count,
+                &mut dir_container,
+                &current_depth,
+                database
+            );
         }
 
 
         start = end;
     }
 
+    // Send the rest, as file_info_batch is not guaranteed to be full everytime
+    if batch_count < BATCH_BUFFER { insert_files_into_db(database, &file_info_batch[..batch_count as usize], 1); }
+
+
     SystemTime::now()
 }
-// **********************************************************************************************************
 
 
-// **********************************************************************************************************
-pub fn insert_file_into_db(
-    database:&Connection,
-    file_info:FileInfo,
+pub struct FileInfoMap {
+    // This allows lookup to the same data (owned references) via 2 different keys
+    pub by_path:HashMap<String, Arc<FileInfo>>,
+    pub by_hash:HashMap<String, Arc<FileInfo>>
+}
+
+
+impl FileInfoMap {
+    pub fn new() -> Self {
+        Self {
+            by_path: HashMap::new(),
+            by_hash: HashMap::new()
+        }
+    }
+
+
+    pub fn insert_file(&mut self, file_info:FileInfo) {
+        let arc_file_info = Arc::new(file_info);
+        self.by_path.insert(arc_file_info.file_path.clone(), Arc::clone(&arc_file_info));
+        self.by_hash.insert(arc_file_info.sha256.clone(), arc_file_info);
+    }
+
+
+    pub fn search_by_path(&self, file_path:&String) -> Option<Arc<FileInfo>> {
+        self.by_path.get(file_path).cloned()
+    }
+    pub fn search_by_hash(&self, sha256:&String) -> Option<Arc<FileInfo>> {
+        self.by_hash.get(sha256).cloned()
+    }
+    pub fn search_map(&self, path:&String, hash:&String) -> Option<Arc<FileInfo>> {
+        self.search_by_hash(hash).or_else(|| self.search_by_path(path))
+    }
+
+
+    pub fn remove_entry(&mut self, file_info:&FileInfo) {
+        self.by_path.remove(&file_info.file_path);
+        self.by_hash.remove(&file_info.sha256);
+    }
+}
+
+
+pub fn scan_dir_snap2(
+    file_info_map:&mut FileInfoMap,
+    path:String,
+    dir_container:&mut Vec<String>,
+    depth:&u8,
+    snap_instance:&u8,
+    database:&Connection
+) {
+
+    let entries = match fs::read_dir(path) {
+
+        Ok(entry) => entry,
+        Err(_) => return
+    };
+
+    for entry in entries {
+        let entry = entry.unwrap();
+        let entry_metadata:Metadata = match fs::metadata(entry.path()) {
+            Ok(entry_metadata) => entry_metadata,
+            Err(_) => continue,
+        };
+
+
+        if entry_metadata.is_dir() {
+            let dir_path:String = entry.path().display().to_string();
+            if dir_path.contains("Dirshot_Output") { continue; }        // Skip this directory
+
+            dir_container.push(dir_path);
+        }
+
+        else if
+            entry_metadata.is_file() &&
+            entry_metadata.len() <= 1024 * 1024 * 1024   // 1GB
+        {
+            let file_path:String = entry.path().display().to_string();
+            if file_path.contains("Dirshot_Output") { continue; }
+
+            let mut file_info:FileInfo = FileInfo::build_file_info_struct(
+                file_path,
+                *depth,
+                entry_metadata
+            );
+
+            file_info_map.insert_file(file_info);
+        }
+    }
+}
+
+
+pub fn recursive_scan_snap2(
+    root_path:String,
+    max_depth:&u8,
+    snap_instance:u8,
+    database:&Connection
+) -> FileInfoMap {
+
+    let mut depth:u8 = 0;
+    let mut dir_container:Vec<String> = Vec::new();
+    let mut file_info_map:FileInfoMap = FileInfoMap::new();
+
+    scan_dir_snap2(
+        &mut file_info_map,
+        root_path,
+        &mut dir_container,
+        &depth,
+        &snap_instance,
+        database
+    );
+
+
+    let mut start:usize = 0;
+    while
+        (depth + 1) != *max_depth &&
+        start != dir_container.len()
+    {
+        let end:usize = dir_container.len();
+        dir_container.reserve_exact(end*2);
+
+
+        depth += 1;
+        for i in start..end {
+            let sub_dir:String = mem::take(&mut dir_container[i]);
+
+            scan_dir_snap2(
+                &mut file_info_map,
+                sub_dir,
+                &mut dir_container,
+                &depth,
+                &snap_instance,
+                database
+            );
+        }
+
+
+        start = end;
+    }
+
+
+    file_info_map
+}
+
+
+pub fn insert_files_into_db(
+    database:&mut Connection,
+    file_infos:&[FileInfo],
     snap_instance:u8
 ) -> Result<(), rusqlite::Error> {
     let table_name = 
         if snap_instance == 1 { "snap1_files" } 
         else { "snap2_files" };
 
-    database.execute(
-        &format!(
-            "INSERT INTO {} (file_path, depth, compressed_bytes, sha256, last_modified, time_created)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-             table_name
-        ),
 
-        rusqlite::params![
+    let query = format!(
+        "INSERT INTO {} (file_path, depth, compressed_bytes, sha256, last_modified, time_created)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         table_name
+    );
+
+    let transaction = database.transaction()?;
+    let mut statement = transaction.prepare(&query)?;
+
+
+    for file_info in file_infos {
+        statement.execute(rusqlite::params![
             file_info.file_path,
             file_info.depth,
 
             file_info.compressed_bytes,
             file_info.sha256,
 
-            file_info.last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string(),
-            file_info.time_created.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string()
-        ]
-    )?;
+            file_info.last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+            file_info.time_created.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
+        ])?;
+    }
+
+    mem::drop(statement);
+    transaction.commit()?;
 
 
     Ok(())
 }
 
-pub fn insert_dir_into_db(database:&Connection, dir_info:DirInfo, snap_instance:u8) {
-    let table_name = 
-        if snap_instance == 1 { "snap1_dirs" } 
-        else { "snap2_dirs" };
-
-    database.execute(
-        &format!(
-
-            "INSERT INTO {} (dir_path, depth, last_modified, time_created)
-             VALUES (?1, ?2, ?3, ?4)", 
-             table_name
-        ),
-
-        rusqlite::params![
-            dir_info.dir_path,
-            dir_info.depth,
-
-            dir_info.last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string(),
-            dir_info.time_created.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string()
-        ]
-    ).unwrap();
-}
-
 
 pub fn make_db_tables(database:&Connection) {
     database.execute_batch(r#"
-        CREATE TABLE IF NOT EXISTS snap1_dirs (
-            dir_path TEXT NOT NULL,
-            depth INTEGER NOT NULL,
-            last_modified TEXT NOT NULL,
-            time_created TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS snap2_dirs (
-            dir_path TEXT NOT NULL,
-            depth INTEGER NOT NULL,
-            last_modified TEXT NOT NULL,
-            time_created TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS snap1_files (
             file_path TEXT NOT NULL,
             depth INTEGER NOT NULL,
@@ -292,4 +424,3 @@ pub fn make_db_tables(database:&Connection) {
         );
     "#).unwrap();
 }
-// **********************************************************************************************************
