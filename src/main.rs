@@ -15,7 +15,7 @@ use analysis::*;
 
 use std::{
     fs,
-    time::{SystemTime, Instant, Duration},
+    time::SystemTime,
     path::PathBuf,
     thread,
     sync::{Arc, Mutex}
@@ -172,8 +172,8 @@ fn main() -> Result<(), eframe::Error> {
 
         max_depth,
 
-        snap1_completion_time:SystemTime::now(),    // Placeholder
-        snap2_file_info_map:FileInfoMap::new(),
+        snap1_completion_time:SystemTime::now(),                    // Placeholder
+        snap2_file_info_map:FileInfoMap::new_with_capacity(0),      // Default value
 
         snap1_button_clicked:false,
         snap2_button_clicked:false,
@@ -198,8 +198,6 @@ fn main() -> Result<(), eframe::Error> {
 
 
 fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
-    let start_time:Instant = Instant::now();
-
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -218,16 +216,15 @@ fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
                 make_db_tables(&connection);
 
 
-                let completion_time:SystemTime = recursive_scan_snap1(
+                let (completion_time, scanned_files_count):(SystemTime, u32) = recursive_scan_snap1(
                     state.root_path.to_string(),
                     &state.max_depth,
                     &mut connection
                 );
 
-                let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
 
                 state.snap1_completion_time = completion_time;
-                state.status = format!("[*] Finished snapshot 1\nElapsed time: {:.2}", elapsed_time);
+                state.status = format!("[*] Finished snapshot 1\n\nAmount of scanned files: {}", scanned_files_count);
                 state.snap1_button_clicked = true;
             },
 
@@ -243,8 +240,6 @@ fn take_snap_1(thread_app:Arc<Mutex<DirshotApp>>) {
 
 
 fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
-    let start_time:Instant = Instant::now();
-
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -260,16 +255,14 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
 
         match Connection::open(db_path) {
             Ok(connection) => {
-                let snap2_file_map:FileInfoMap = recursive_scan_snap2(
+                let (snap2_file_map, scanned_files_count):(FileInfoMap, u32) = recursive_scan_snap2(
                     state.root_path.to_string(),
                     &state.max_depth,
-                    2,
                     &connection
                 );
 
-                let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
 
-                state.status = format!("[*] Finished snapshot 2\nElapsed time: {:.2}s", elapsed_time);
+                state.status = format!("[*] Finished snapshot 2\n\nAmount of scanned files: {}\n", scanned_files_count);
                 state.snap2_file_info_map = snap2_file_map;
                 state.snap2_button_clicked = true;
             },
@@ -284,8 +277,6 @@ fn take_snap_2(thread_app:Arc<Mutex<DirshotApp>>){
 
 
 fn compare(thread_app:Arc<Mutex<DirshotApp>>) {
-    let start_time:Instant = Instant::now();
-
 
     if let Ok(mut state) = thread_app.lock() {
         let mut output_path:PathBuf = PathBuf::from(&state.root_path);
@@ -324,14 +315,9 @@ fn compare(thread_app:Arc<Mutex<DirshotApp>>) {
                     make_analysis_output(&state.root_path, file_groups);
                     let mut report_path:PathBuf = output_path;
                     report_path.push("report.txt");
-                    let elapsed_time:f64 = start_time.elapsed().as_secs_f64();
 
 
-                    state.status = format!(
-                        "[*] Finished comparing. You may check {}\nElapsed time: {:.2}s",
-                        report_path.display(),
-                        elapsed_time
-                    );
+                    state.status = format!("[*] Finished comparing. You may check {}", report_path.display());
                 }
 
                 state.compare_button_clicked = true;

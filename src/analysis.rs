@@ -92,7 +92,7 @@ pub fn time_based_comparison(
 }
 
 
-pub fn write_file_groups_to_db(
+pub fn write_file_groups_into_db(
     database:&Connection,
     file_groups:&[Vec<String>; 4],
     snap2_file_info_map:&FileInfoMap

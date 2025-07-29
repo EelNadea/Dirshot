@@ -14,7 +14,9 @@ use sha256::digest;
 use zstd::encode_all;
 
 
-const BATCH_BUFFER:u8 = 100;    // buffer for file_info_batch
+// Buffer for file_info_batch
+// file_info_batch can be found in functions recursive_scan_snap1 and recursive_scan_snap2
+const BATCH_BUFFER:u8 = 100;
 
 pub struct FileInfo {
     pub file_path:String,
@@ -88,8 +90,9 @@ impl FileInfo {
 
 pub fn scan_dir_snap1(
     path:String,
-    file_info_batch:&mut [FileInfo; 100],
+    file_info_batch:&mut [FileInfo; BATCH_BUFFER as usize],
     batch_count:&mut u8,
+    scanned_files_count:&mut u32,
     dir_container:&mut Vec<String>,
     depth:&u8,
     database:&mut Connection
@@ -135,6 +138,7 @@ pub fn scan_dir_snap1(
             else {
                 // Resetting file_info_batch is not needed since batch_counter will overwrite the previous data
                 insert_files_into_db(database, &*file_info_batch, 1);
+                *scanned_files_count += BATCH_BUFFER as u32;
                 *batch_count = 0;
 
                 file_info_batch[*batch_count as usize] = file_info;
@@ -149,7 +153,7 @@ pub fn recursive_scan_snap1(
     root_path:String,
     max_depth:&u8,
     database:&mut Connection
-) ->  SystemTime {
+) ->  (SystemTime, u32) {
 
     /*
         Traverses the file system using a breadth-first search strategy.
@@ -173,11 +177,13 @@ pub fn recursive_scan_snap1(
 
     let mut file_info_batch:[FileInfo; BATCH_BUFFER as usize] = std::array::from_fn(|_| FileInfo::new());
     let mut batch_count:u8 = 0;  // Keeps count of the non-trivial FileInfo members
+    let mut scanned_files_count:u32 = 0;
 
     scan_dir_snap1(
         root_path,
         &mut file_info_batch,
         &mut batch_count,
+        &mut scanned_files_count,
         &mut dir_container,
         &current_depth,
         database
@@ -201,6 +207,7 @@ pub fn recursive_scan_snap1(
                 sub_dir,
                 &mut file_info_batch,
                 &mut batch_count,
+                &mut scanned_files_count,
                 &mut dir_container,
                 &current_depth,
                 database
@@ -212,10 +219,14 @@ pub fn recursive_scan_snap1(
     }
 
     // Send the rest, as file_info_batch is not guaranteed to be full everytime
-    if batch_count < BATCH_BUFFER { insert_files_into_db(database, &file_info_batch[..batch_count as usize], 1); }
+    if batch_count < BATCH_BUFFER {
+        insert_files_into_db(database, &file_info_batch[..batch_count as usize], 1);
+        scanned_files_count += batch_count as u32;
+    }
 
 
-    SystemTime::now()
+    // Return completion time and the number of scanned files
+    (SystemTime::now(), scanned_files_count)
 }
 
 
@@ -227,10 +238,10 @@ pub struct FileInfoMap {
 
 
 impl FileInfoMap {
-    pub fn new() -> Self {
+    pub fn new_with_capacity(capacity:usize) -> Self {
         Self {
-            by_path: HashMap::new(),
-            by_hash: HashMap::new()
+            by_path: HashMap::with_capacity(capacity),
+            by_hash: HashMap::with_capacity(capacity)
         }
     }
 
@@ -264,8 +275,8 @@ pub fn scan_dir_snap2(
     file_info_map:&mut FileInfoMap,
     path:String,
     dir_container:&mut Vec<String>,
+    scanned_files_count:&mut u32,
     depth:&u8,
-    snap_instance:&u8,
     database:&Connection
 ) {
 
@@ -304,6 +315,7 @@ pub fn scan_dir_snap2(
             );
 
             file_info_map.insert_file(file_info);
+            *scanned_files_count += 1;
         }
     }
 }
@@ -312,20 +324,23 @@ pub fn scan_dir_snap2(
 pub fn recursive_scan_snap2(
     root_path:String,
     max_depth:&u8,
-    snap_instance:u8,
     database:&Connection
-) -> FileInfoMap {
+) -> (FileInfoMap, u32) {
 
     let mut depth:u8 = 0;
     let mut dir_container:Vec<String> = Vec::new();
-    let mut file_info_map:FileInfoMap = FileInfoMap::new();
+
+
+    let estimated_files:usize = ((*max_depth as usize) * (*max_depth as usize)) * 500;
+    let mut file_info_map:FileInfoMap = FileInfoMap::new_with_capacity(estimated_files);
+    let mut scanned_files_count:u32 = 0;
 
     scan_dir_snap2(
         &mut file_info_map,
         root_path,
         &mut dir_container,
+        &mut scanned_files_count,
         &depth,
-        &snap_instance,
         database
     );
 
@@ -347,8 +362,8 @@ pub fn recursive_scan_snap2(
                 &mut file_info_map,
                 sub_dir,
                 &mut dir_container,
+                &mut scanned_files_count,
                 &depth,
-                &snap_instance,
                 database
             );
         }
@@ -358,7 +373,7 @@ pub fn recursive_scan_snap2(
     }
 
 
-    file_info_map
+    (file_info_map, scanned_files_count)
 }
 
 
